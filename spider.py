@@ -11,6 +11,8 @@ import threading
 import httplib
 import traceback
 import Queue
+import win32crypt
+import cookielib
 
 os.environ['http_proxy'] = '10.144.1.10:8080'
 os.environ['https_proxy'] = '10.144.1.10:8080'
@@ -47,7 +49,7 @@ class SpiderQueue():
     def queueEmpty(taskType):
         return  SpiderQueue.queueDict[taskType].empty()
 
-#this fuction could be refactor in furture if need.
+    #this fuction could be refactor in furture if need.
     @staticmethod
     def validateTask(task):
         if task.getURL() in SpiderQueue.urlMap:
@@ -152,7 +154,6 @@ class monitorThread(threading.Thread):
             SpiderQueue.debugQueue(5)
 
 
-
 class spiderWorker(threading.Thread):
     def __init__ (self, workerType):
         threading.Thread.__init__(self) 
@@ -160,68 +161,84 @@ class spiderWorker(threading.Thread):
         self.pool = eventlet.GreenPool()
         self.workerType = workerType
 
-    def readHead(self,url):
-        headers = {
-            'User-Agent':'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'
-            }
-        req = Request(url, headers=headers)
-        req.get_method = lambda : 'HEAD'
-        try:
-            response  = urlopen(req, timeout=10)
-        except socket.timeout, e:
-            raise e
-        except Exception, e:
-            print "[%s] Get URL Head %s failed, exception:%s" %(threading.current_thread().name, url, e)
-            return False
-        ct = response.info()['Content-Type']
-        if "text/html" in ct or "image/" in  ct:
-            return True
-        else:
-            print "[%s] URL:%s not support Content-Type:%s" %(threading.current_thread().name, url, ct)
-            return False
+    # def readHead(self,url):
+    #     headers = {
+    #         'User-Agent':'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'
+    #         }
+    #     req = Request(url, headers=headers)
+    #     req.get_method = lambda : 'HEAD'
+    #     try:
+    #         response  = urlopen(req, timeout=10)
+    #     except socket.timeout, e:
+    #         raise e
+    #     except Exception, e:
+    #         print "[%s] Get URL Head %s failed, exception:%s" %(threading.current_thread().name, url, e)
+    #         return False
+    #     ct = response.info()['Content-Type']
+    #     if "text/html" in ct or "image/" in  ct:
+    #         return True
+    #     else:
+    #         print "[%s] URL:%s not support Content-Type:%s" %(threading.current_thread().name, url, ct)
+    #         return False
 
+def build_opener(domain=None):
+    #get cookies from chrome 
+    cookie_file_path = os.path.join(os.environ['LOCALAPPDATA'], r'Google\Chrome\User Data\Default\Cookies')
+    if not os.path.exists(cookie_file_path):
+        raise Exception('Cookies file not exist!')
+
+    sql = 'select host_key, name, encrypted_value, path from cookies'
+    if domain:
+        sql += ' where host_key like "%{}%"'.format(domain)
+    with sqlite3.connect(cookie_file_path) as conn:
+        rows = conn.execute(sql)
+
+    cookiejar = cookielib.CookieJar()
+    for row in rows:
+        #get encrypted value
+        pwdHash = str(row[2])  
+        try:
+            ret = win32crypt.CryptUnprotectData(pwdHash, None, None, None, 0)
+        except:
+            print 'Fail to decrypt chrome cookies'
+            sys.exit(-1)
+
+        cookie_item = cookielib.Cookie(version=0, name=row[1], value=ret[1],
+                     port=None, port_specified=None,domain=row[0], 
+                     domain_specified=None, domain_initial_dot=None,path=row[3], 
+                     path_specified=None,secure=None,expires=None,
+                     discard=None,comment=None,comment_url=None,rest=None,rfc2109=False,
+                     )
+        cookiejar.set_cookie(cookie_item)    # Apply each cookie_item to cookiejar
+    return urllib2.build_opener(urllib2.HTTPCookieProcessor(cookiejar))
 
     def getURLContent(self, url):
         URLContent = ""
-        if self.readHead(url):
+        retry = 0
+        while retry < 3:
+            retry += 1
             headers = {
                 'User-Agent':'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'
-                }
+            }
             req = Request(url, headers=headers)
 
             try:
                 response  = urlopen(req, timeout=10)
-            except socket.timeout, e:
-                raise e
+                URLContent = response.read()
             except Exception, e:
-                print "[%s] Open URL:%s failed, exception:%s" %(threading.current_thread().name, url, e)
-                #traceback.print_exc()
-                return URLContent
+                #print "[%s] get URL:%s failed, exception:%s" %(threading.current_thread().name, url, e)
+                continue
             else:
-                #print response.getcode()
-                try:
-                    URLContent = response.read()
-                except socket.timeout, e:
-                    raise e
-                except Exception, e:
-                    print "[%s] Read URL:%s failed, exception:%s" %(threading.current_thread().name, url, e)
-                    return URLContent
-            return URLContent
-        else:
-            return URLContent
+                break
+        return URLContent
+
 
     def parse(self, task):
-        try:
-            content = self.getURLContent(task.getURL())
-        except socket.timeout, e:
-            task.retryAdd()
-            if not task.getRetry() > 3:
-                SpiderQueue.pushTask(task)
-            else:
-                print "[%s] Fetch URL:%s failed, timeout" %(threading.current_thread().name, url)
+        content = self.getURLContent(task.getURL())
+        if len(content) >0:
+            task.doWork(content)
         else:
-            if len(content) >0:
-                task.doWork(content)
+            print "[%s] Fetch URL:%s failed, timeout" %(threading.current_thread().name, task.getURL())
 
 
     def run(self):
