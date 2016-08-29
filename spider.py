@@ -1,7 +1,7 @@
 from __future__ import with_statement
 
 import eventlet
-from eventlet.green.urllib2 import Request, urlopen, URLError, HTTPError
+from eventlet.green import urllib2
 import urlparse
 import re
 import os
@@ -13,9 +13,12 @@ import traceback
 import Queue
 import win32crypt
 import cookielib
+import sqlite3
 
-os.environ['http_proxy'] = '10.144.1.10:8080'
-os.environ['https_proxy'] = '10.144.1.10:8080'
+#os.environ['http_proxy'] = '10.144.1.10:8080'
+#os.environ['https_proxy'] = '10.144.1.10:8080'
+os.environ['http_proxy'] = '87.254.212.121:8080'
+os.environ['https_proxy'] = '87.254.212.121:8080'
 
 
 #make monkey path for read
@@ -123,6 +126,14 @@ class ImageTask(Task):
 
 class URLTask(Task):
     def doWork(self, content):
+
+        titleRe = re.compile(r'<title>(.*?)</title>')
+        title = titleRe.search(content)
+        if title:
+            with open("log.txt", "a+") as log:
+                log.write(self.url + ":" + title.group(1) +"\n")
+
+
         urlRE = re.compile(r'href=\"(.*?)\"')     #get all href link
         subURLs = map(lambda x, y = self.url:  x if x.startswith("http") else urlparse.urljoin(y, x),
             urlRE.findall(content)) 
@@ -133,12 +144,27 @@ class URLTask(Task):
             if url.endswith("png") or url.endswith("jpg") or url.endswith("gif"):
                 SpiderQueue.pushTask(ImageTask(url))
             else:
-                SpiderQueue.pushTask(URLTask(url))
+                with open("demo.html", "a+") as file:
+                    file.write(url + "\n")
+                #SpiderQueue.pushTask(URLTask(url))
 
-        imgSrcRE = re.compile(r'img.*?src=\"(.*?)\"')  #get all image label
+        imgSrcRE = re.compile(r'<img.*?src=\"(.*?)\"') 
+        #some image files location were put in zoomfile attrubte.
+        #<img id="aimg_11537" aid="11537" src="static/image/common/none.gif" 
+        #   zoomfile="data/attachment/forum/201608/23/162246wmnnlnywll3nntlk.jpg" 
+        #   file="data/attachment/forum/201608/23/162246wmnnlnywll3nntlk.jpg" 
+        #   class="zoom" onclick="zoom(this, this.src, 0, 0, 0)" width="600" alt="image.jpg" 
+        #   title="image.jpg" w="3264" />
+
+
+        imgFileRe = re.compile(r'<img.*?zoomfile=\"(.*?)\"')
         imgURLs = map(lambda x, y = self.url:  x if x.startswith("http") else urlparse.urljoin(y, x),
-            imgSrcRE.findall(content))
+            filter(lambda x : "none.gif" not in x, imgSrcRE.findall(content)))
+        img2URLs = map(lambda x, y = self.url:  x if x.startswith("http") else urlparse.urljoin(y, x),
+            imgFileRe.findall(content))
         for xurl in imgURLs:
+            SpiderQueue.pushTask(ImageTask(xurl))
+        for xurl in img2URLs:
             SpiderQueue.pushTask(ImageTask(xurl))
 
     def getType(self):
@@ -160,57 +186,40 @@ class spiderWorker(threading.Thread):
         self.workerType = workerType
         self.pool = eventlet.GreenPool()
         self.workerType = workerType
+        self.opener = urllib2.build_opener()
 
-    # def readHead(self,url):
-    #     headers = {
-    #         'User-Agent':'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'
-    #         }
-    #     req = Request(url, headers=headers)
-    #     req.get_method = lambda : 'HEAD'
-    #     try:
-    #         response  = urlopen(req, timeout=10)
-    #     except socket.timeout, e:
-    #         raise e
-    #     except Exception, e:
-    #         print "[%s] Get URL Head %s failed, exception:%s" %(threading.current_thread().name, url, e)
-    #         return False
-    #     ct = response.info()['Content-Type']
-    #     if "text/html" in ct or "image/" in  ct:
-    #         return True
-    #     else:
-    #         print "[%s] URL:%s not support Content-Type:%s" %(threading.current_thread().name, url, ct)
-    #         return False
 
-def build_opener(domain=None):
-    #get cookies from chrome 
-    cookie_file_path = os.path.join(os.environ['LOCALAPPDATA'], r'Google\Chrome\User Data\Default\Cookies')
-    if not os.path.exists(cookie_file_path):
-        raise Exception('Cookies file not exist!')
+    def buildCookiesOpener(self, domain=None):
+        #get cookies from chrome 
+        cookie_file_path = os.path.join(os.environ['LOCALAPPDATA'], 
+                                r'Google\Chrome\User Data\Default\Cookies')
+        if not os.path.exists(cookie_file_path):
+            raise Exception('Cookies file not exist!')
 
-    sql = 'select host_key, name, encrypted_value, path from cookies'
-    if domain:
-        sql += ' where host_key like "%{}%"'.format(domain)
-    with sqlite3.connect(cookie_file_path) as conn:
-        rows = conn.execute(sql)
+        sql = 'select host_key, name, encrypted_value, path from cookies'
+        if domain:
+            sql += ' where host_key like "%{}%"'.format(domain)
+        with sqlite3.connect(cookie_file_path) as conn:
+            rows = conn.execute(sql)
 
-    cookiejar = cookielib.CookieJar()
-    for row in rows:
-        #get encrypted value
-        pwdHash = str(row[2])  
-        try:
-            ret = win32crypt.CryptUnprotectData(pwdHash, None, None, None, 0)
-        except:
-            print 'Fail to decrypt chrome cookies'
-            sys.exit(-1)
+        cookiejar = cookielib.CookieJar()
+        for row in rows:
+            #get encrypted value
+            pwdHash = str(row[2])  
+            try:
+                ret = win32crypt.CryptUnprotectData(pwdHash, None, None, None, 0)
+            except:
+                print 'Fail to decrypt chrome cookies'
+                sys.exit(-1)
 
-        cookie_item = cookielib.Cookie(version=0, name=row[1], value=ret[1],
-                     port=None, port_specified=None,domain=row[0], 
-                     domain_specified=None, domain_initial_dot=None,path=row[3], 
-                     path_specified=None,secure=None,expires=None,
-                     discard=None,comment=None,comment_url=None,rest=None,rfc2109=False,
-                     )
-        cookiejar.set_cookie(cookie_item)    # Apply each cookie_item to cookiejar
-    return urllib2.build_opener(urllib2.HTTPCookieProcessor(cookiejar))
+            cookie_item = cookielib.Cookie(version=0, name=row[1], value=ret[1],
+                         port=None, port_specified=None,domain=row[0], 
+                         domain_specified=None, domain_initial_dot=None,path=row[3], 
+                         path_specified=None,secure=None,expires=None,
+                         discard=None,comment=None,comment_url=None,rest=None,rfc2109=False,
+                         )
+            cookiejar.set_cookie(cookie_item)    # Apply each cookie_item to cookiejar
+        self.opener =  urllib2.build_opener(urllib2.HTTPCookieProcessor(cookiejar))
 
     def getURLContent(self, url):
         URLContent = ""
@@ -218,12 +227,11 @@ def build_opener(domain=None):
         while retry < 3:
             retry += 1
             headers = {
-                'User-Agent':'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'
+                
             }
-            req = Request(url, headers=headers)
-
+            self.opener.addheaders = [('User-Agent','Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6')]
             try:
-                response  = urlopen(req, timeout=10)
+                response  = self.opener.open(url, timeout=10)
                 URLContent = response.read()
             except Exception, e:
                 #print "[%s] get URL:%s failed, exception:%s" %(threading.current_thread().name, url, e)
@@ -251,19 +259,26 @@ def build_opener(domain=None):
             self.pool.waitall()
 
 
-SpiderQueue.pushTask(URLTask("http://www.upchengdu.com/"))
+SpiderQueue.pushTask(URLTask("http://www.upchengdu.com/forum.php?mod=viewthread&tid=2867"))
 threadPool = []
 urlWorker = spiderWorker("URL")
+try:
+    urlWorker.buildCookiesOpener("upchengdu")
+except Exception, e:
+    print "add cookies handler failed: %s" %str(e)
 threadPool.append(urlWorker)
 urlWorker.start()
 
 urlWorker = spiderWorker("IMAGE")
+try:
+    urlWorker.buildCookiesOpener("upchengdu")
+except Exception, e:
+    print "add cookies handler failed: %s" %str(e)
 threadPool.append(urlWorker)
 urlWorker.start()
 
 monitorT = monitorThread()
 monitorT.start()
 threadPool.append(urlWorker)
-
 
 SpiderQueue.join()
