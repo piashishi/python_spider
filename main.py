@@ -6,8 +6,8 @@ from spiderWorker import URLFetchWorker, ContentParserWorker, ContentDownloadWor
 manager = SpiderManager(webSite="http://www.scu-ifc.org", isfetchChildRenURLs=False);
 
 #URLFetchWorker for download URL from internet
-for x in range(1):
-    Worker = URLFetchWorker(manager, useCookies=False)
+for x in range(10):
+    Worker = URLFetchWorker(manager, useCookies=True)
     manager.threadArray.append(Worker)
     Worker.start()
 

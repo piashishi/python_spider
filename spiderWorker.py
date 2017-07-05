@@ -16,12 +16,13 @@ import httplib
 import traceback
 import win32crypt
 import cookielib
+import sqlite3
 
-
-os.environ['http_proxy'] = '87.254.212.121:8080'
-os.environ['https_proxy'] = '87.254.212.121:8080'
 
 #base class
+#If you want to define a new worker, you need implement functions: doWork and getTaskType
+#doWork: parameter including URL and Content.
+#getTaskType: each worker assocate with a special task, you also need register the tasktype to manager
 class worker(threading.Thread):
     def __init__ (self, manager):
         threading.Thread.__init__(self) 
@@ -34,10 +35,13 @@ class worker(threading.Thread):
         self.manager = manager
 
 
+    #url: web URL for HTML
+    #content: HTML content
     def doWork(self, url, content=None):
         raise NotImplementedError
 
-    def TaskType(self):
+    #return worker type
+    def getTaskType(self):
         raise NotImplementedError
 
 
@@ -56,13 +60,13 @@ class worker(threading.Thread):
         index = 0
         while True and not self.manager.exit:
             try:
-                task = self.manager.getTask(self.TaskType())
+                task = self.manager.getTask(self.getTaskType())
                 if task:
                     self.totalTask += 1
                     gt = self.pool.spawn(self.doWork, url=task[0], content=task[1])
                     gt.link(self.taskFinished)
                     self.greenTaskArray.append(gt)
-                    self.manager.taskDone(self.TaskType())
+                    self.manager.taskDone(self.getTaskType())
                     eventlet.sleep(100000/1000000.0) #sleep 0.1 Second
                 else:
                     self.pool.waitall()
@@ -99,8 +103,14 @@ class URLFetchWorker(worker):
         if not os.path.exists(cookie_file_path):
             raise Exception('Cookies file not exist!')
 
-        domain = re.compile(r'http://(.*?)/').findall(webSite)[0]
-
+        #fetch domain from website,
+        domain = ""
+        tmpList = re.compile(r'http://(.*?)/').findall(self.manager.webSite)
+        if tmpList:
+            domain = tmpList[0]
+        else:
+            #webSite is a root
+            domain = re.compile(r'http://(.*?)').findall(self.manager.webSite)
 
         sql = 'select host_key, name, encrypted_value, path from cookies'
         sql += ' where host_key like "%{}%"'.format(domain)
@@ -167,7 +177,7 @@ class URLFetchWorker(worker):
         else:
             return False
 
-    def TaskType(self):
+    def getTaskType(self):
         return "URLFetchTask"
 
 #worker for download HTML content
@@ -222,7 +232,7 @@ class ContentDownloadWorker(worker):
         else:
             return False
 
-    def TaskType(self):
+    def getTaskType(self):
         return "ContenttotalTask"
 
 
@@ -306,5 +316,5 @@ class ContentParserWorker(worker):
             self.parseContent(url, content)
             return True
 
-    def TaskType(self):
+    def getTaskType(self):
             return "ContentParserTask"

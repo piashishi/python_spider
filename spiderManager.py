@@ -22,7 +22,7 @@ class SpiderManager():
         self.isfetchChildRenURLs = isfetchChildRenURLs
         self.threadArray = []
         self.scheduler = BackgroundScheduler()
-        self.scheduler.add_job(self.checkWorkerStatus, 'interval', seconds=5)
+        self.scheduler.add_job(self.checkWorkerStatus, 'interval', seconds=2)
         self.scheduler.add_job(self.debugWorker, 'interval',seconds=15)
 
         #Add URL to queue
