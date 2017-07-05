@@ -1,7 +1,7 @@
-# python_spider
-0. Can directly run at Python2.7 on windows.
-1. The program is a demo for study python.Functionality:  fetch/clone HTML/Website.
-2. The demo include manager part and worker part:
+## python_spider
+#0. Can directly run at Python2.7 on windows.
+#1. The program is a demo for study python.Functionality:  fetch/clone HTML/Website.
+#2. The demo include manager part and worker part:
   2.1: spiderManager take responsibility for manager work queue and monitor woker threads status
   2.2: spiderWorker include: URLFetchWorker, ContentParserWorker and ContentDownloadWorker
     URLFetchWorker: thread for GET URL content from Internet, support cookies(only for windows chrome).
